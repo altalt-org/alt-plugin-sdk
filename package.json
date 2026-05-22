@@ -1,0 +1,58 @@
+{
+  "name": "alt-plugin-sdk",
+  "version": "0.2.0",
+  "description": "Type-safe browser SDK and runtime contracts for Alt plugins.",
+  "license": "MIT",
+  "author": "Alt (https://altalt.io)",
+  "homepage": "https://github.com/altalt-org/alt/tree/main/vendor/alt-plugin-sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/altalt-org/alt.git",
+    "directory": "vendor/alt-plugin-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/altalt-org/alt/issues"
+  },
+  "keywords": [
+    "alt",
+    "plugin",
+    "sdk",
+    "electron",
+    "ai",
+    "transcription"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "import": "./dist/contracts.js"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.ts",
+      "import": "./dist/ai.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^2.0.40",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {}
+}
