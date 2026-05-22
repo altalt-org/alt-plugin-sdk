@@ -193,8 +193,8 @@ major `1` semantics until you opt in.
 ## 5. Permissions
 
 A plugin only gets exactly what its manifest declares. Calling a method
-without its permission throws `Plugin {id} lacks permission "{perm}"` at the
-IPC boundary and never touches the database, file system, or models.
+without its permission throws `Plugin permission required: {permission}` at
+the IPC boundary and never touches the database, file system, or models.
 
 | Permission          | Unlocks                                                                                                                  |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -205,13 +205,14 @@ IPC boundary and never touches the database, file system, or models.
 | `notes:write`       | `alt.notes.create / update / delete / setMemo / setSummary / appendTranscriptLine / upsertComponent / deleteComponent`   |
 | `notes:select`      | `alt.notes.select(...)` — focuses a note in Alt's main window                                                            |
 | `folders:write`     | `alt.folders.create / rename / move / delete`                                                                            |
-| `ai:chat`           | `alt.ai.models.list / stream / chat.stream / complete / summarize`                                                       |
+| `ai:chat`           | `alt.ai.stream / chat.stream / complete / summarize`. (Note: `alt.ai.models.list` is NOT gated — any plugin can call it.) |
 | `recording:control` | `alt.recording.start / stop / getStatus`                                                                                 |
 | `transcription:run` | `alt.transcription.transcribeFile / transcribeNote`                                                                      |
 | `files:read`        | `alt.files.list / read`                                                                                                  |
 | `files:write`       | `alt.files.attach / delete`                                                                                              |
 | `settings:read`     | `alt.settings.get / list`                                                                                                |
 | `actions:notes`     | **Legacy.** Old plugins that declare this auto-get `notes:write` + `notes:select`. New plugins should declare the modern names. |
+| `settings:write`    | **Reserved.** Accepted by the manifest schema for forward compatibility, but no method currently requires it. Don't declare it. |
 
 Declare the **minimum** permissions you need. Users see the list before
 install and can later disable a plugin if its permissions feel off.
@@ -232,9 +233,12 @@ keeps working even if the host bridge is initialized after your code starts.
 
 ### 6.1 `alt.storage` — JSON KV per plugin
 
-Plugin-scoped, persisted to electron-store inside the host. Values are deep
-JSON: strings, numbers, booleans, `null`, arrays, and plain objects. No
-binary, no Map/Set, no circular refs.
+Plugin-scoped, persisted to Alt's SQLite database (in the `plugin_storage`
+table, one row per `(pluginId, key)`). Values are deep JSON: strings,
+numbers, booleans, `null`, arrays, and plain objects. No binary, no
+Map/Set, no circular refs. Large blobs belong in `alt.files.attach` —
+the storage row is JSON-encoded and meant for small structured state
+(preferences, indices, drafts).
 
 ```ts
 type Counter = { count: number; updatedAt: string };
@@ -300,7 +304,7 @@ Event types and their payload (`PluginHostEventPayload` union):
 | `folderCreated`          | `PluginFolderNode`                                                   | New folder                                       |
 | `folderUpdated`          | `PluginFolderNode`                                                   | Folder renamed or moved                         |
 | `folderDeleted`          | `{ folderId }`                                                       | Folder removed                                   |
-| `componentUpdated`       | `PluginNoteComponentSummary`                                         | Component (memo/summary/transcript/etc) changed |
+| `componentUpdated`       | `PluginNoteComponentSummary`                                         | Component (memo/summary/transcript/etc) created or updated. Note: NOT fired on `deleteComponent` — there's no `componentDeleted` event today; subscribe to `noteUpdated` or re-list if you need to track deletions. |
 | `settingChanged`         | `{ key, value }`                                                     | One of the curated app settings updated         |
 | `recordingLevel`         | `{ micDb, systemDb, timestamp }`                                     | Reserved — not currently emitted                 |
 
@@ -445,8 +449,12 @@ Limits:
 - `markdown` body (memo/summary) — ≤ 500,000 chars.
 - `appendTranscriptLine.text` — 1–10,000 chars.
 - `upsertComponent.contentText` — ≤ 1,000,000 chars.
-- `setMemo` / `setSummary` / `appendTranscriptLine` and `upsertComponent`
-  return `{ componentId }` of the (possibly newly created) component.
+- `setMemo` / `setSummary` / `appendTranscriptLine` return `{ componentId }`
+  of the (possibly newly created) component.
+- `upsertComponent` returns the full `PluginNoteComponentSummary` (`id`,
+  `noteId`, `componentType`, `title`, `displayOrder`, `hasFile`,
+  `createdAt`, `updatedAt`) of the upserted component — not just
+  `{ componentId }`.
 
 ### 6.5 `alt.folders` — manage the note tree
 
@@ -531,11 +539,25 @@ fileHandle.cancel();
 
 Error codes (`PluginTranscriptionStreamErrorCode`):
 
-- `FORBIDDEN` — plugin lacks `transcription:run`
-- `INVALID_REQUEST` — bad params (e.g. unknown file path, invalid noteId)
-- `RECORDING_ACTIVE` — Alt is currently recording; can't run transcription
-- `FILE_UNAVAILABLE` — the file was deleted or unreadable
-- `PIPELINE_ERROR` — Whisper/diarization pipeline crashed
+- `FORBIDDEN` — plugin lacks `transcription:run`.
+- `INVALID_REQUEST` — request fails schema validation (missing/empty
+  `filePath`, non-positive `noteId`, etc.). Note: this is shape-only —
+  the host does NOT pre-check that a `filePath` exists; a non-existent
+  or unreadable path surfaces later as `PIPELINE_ERROR`.
+- `RECORDING_ACTIVE` — Alt is currently recording; can't run transcription.
+- `FILE_UNAVAILABLE` — only from `transcribeNote`. Fires when the target
+  note has no `recording` component or the file_inode can't be resolved.
+  A deleted file passed to `transcribeFile` does NOT fire this code —
+  it surfaces as `PIPELINE_ERROR` (the Whisper pipeline can't open it).
+- `PIPELINE_ERROR` — Whisper/diarization pipeline crashed, OR the file
+  couldn't be opened (see `FILE_UNAVAILABLE` note above).
+
+Also note the defaults the host applies when you omit optional fields:
+
+- `language` falls back to the user's `transcription.lectureLanguage`
+  setting (typically `'en'`). You don't need to pass it unless you want
+  to override.
+- `diarization` defaults to `false` when omitted.
 
 ### 6.8 `alt.ai` — chat completions and summarize
 
@@ -584,8 +606,11 @@ const handle = await alt.ai.chat.stream(
 );
 // handle.cancel() to abort.
 
-// Run Alt's own summarize prompt against a note. Pulls the transcript+memo,
-// runs through the configured model, returns markdown.
+// Run Alt's own summarize prompt against a note. The host composes the
+// prompt from up to three sources on the note — memo, transcript, and any
+// existing summary (so re-running it refines an earlier output rather than
+// starting from scratch). Each is included only if non-empty. Throws if
+// all three are empty. Runs through the chosen model, returns markdown.
 const sum = await alt.ai.summarize({
   noteId,
   style: 'Focus on definitions and worked examples.',
@@ -619,38 +644,48 @@ const bytes: ArrayBuffer = await someFile.arrayBuffer();
 const attached = await alt.files.attach({
   noteId,
   fileName: 'lecture12.pdf',
-  data: bytes,                  // max 256 MB
+  data: bytes,                  // max 256 MiB (256 * 1024 * 1024 bytes)
   mimeType: 'application/pdf',
   componentType: 'slides',      // 'slides' | 'recording'
   title: 'Lecture 12 — Slides',
   displayOrder: 0,
 });
 // attached: { componentId, fileId, fileName, mimeType, sizeBytes }
+//   mimeType is `string | null` — null when the caller omitted it.
 
 const list = await alt.files.list({ noteId });
 const blob = await alt.files.read({ fileId: list[0].fileId });
-// { fileName, mimeType, sizeBytes, data: ArrayBuffer }
+// { fileName, mimeType: string | null, sizeBytes, data: ArrayBuffer }
 
 await alt.files.delete({ componentId: attached.componentId });
 ```
 
 Constraints:
 
-- `fileName` is ≤ 260 chars and **must not contain** path separators or
-  control characters. Host re-validates with a strict regex; bad names
-  throw.
+- `fileName` is 1–260 chars and must match `^[^\\/\x00\n\r:*?"<>|]+$` —
+  blocks `\ / : * ? " < > |` and the NUL/LF/CR control bytes (Windows
+  reserved chars plus path separators). Other control bytes are
+  technically allowed by this regex but are still a bad idea. Host
+  re-validates; bad names throw.
 - `componentType` is restricted to `slides | recording` because the database
   only allows file-backed components for those types. Use
   `notes.upsertComponent` for text-based components instead.
-- `data` is an `ArrayBuffer` capped at 256 MiB.
+- `data` is an `ArrayBuffer` capped at 256 MiB (`256 * 1024 * 1024`).
 
 ### 6.10 `alt.settings` — read curated app settings
 
-Permission: `settings:read`. Read-only allowlist. There is **no
-settings:write**; if you need plugin-owned settings, use `alt.storage`.
+Permission: `settings:read`. Read-only allowlist — there is no
+write surface on the host today (the `settings:write` permission is
+reserved but unused). If you need plugin-owned settings, use
+`alt.storage`.
 
 ```ts
-const theme = await alt.settings.get('theme'); // 'system' | 'light' | 'dark' | null
+const theme = await alt.settings.get('theme');
+// theme is typed `PluginAppSettingValue` = `string | number | boolean | null`.
+// The SDK does NOT narrow per-key — you have to check at runtime.
+// Typical values seen here: 'system' | 'light' | 'dark'. `null` if unset.
+if (typeof theme === 'string') applyTheme(theme);
+
 const all = await alt.settings.list();
 // {
 //   theme: 'dark',
@@ -694,9 +729,13 @@ const res = await altFetch('https://alt-plugin.invalid/v1/chat/completions', {
 // Standard streaming Response — use res.body.getReader() or res.text().
 ```
 
-`Authorization` and `x-machine-id` headers are stripped before the request
-reaches the host, so SDKs that try to inject API keys won't accidentally
-exfiltrate them.
+Headers are filtered twice on the way to the cloud. First in the SDK,
+`Authorization` and `x-machine-id` are stripped so AI-SDK clients that
+auto-inject API keys can't exfiltrate them. Then the host applies a
+strict allowlist: only `accept` and `content-type` survive — everything
+else (custom routing hints, request IDs, telemetry headers) is silently
+dropped. Don't rely on passing arbitrary headers through `createAltFetch`;
+put any plugin-side metadata in the request body instead.
 
 ### `createAltProvider(options?)`
 
@@ -731,8 +770,11 @@ Use this whenever you'd normally instantiate `@ai-sdk/openai` etc. Plugins
 
 ### 8.1 Live transcript subscriber
 
-Watch active-note changes, fetch its transcript whenever it updates, render
-the last 10 lines.
+Watch active-note changes, fetch its transcript whenever it updates,
+render the last 10 transcript lines. Note `getContent().transcript` is
+the LLM-formatted plaintext (`[m:ss | Speaker] text` per line) — slicing
+by `\n` is fine here since each entry is exactly one line, but if you
+need structured timing data go through §8.5 instead.
 
 ```ts
 // permissions: ['notes:read', 'events:subscribe', 'appState:read']
@@ -749,21 +791,33 @@ const refresh = async (noteId: number) => {
   render(lines);
 };
 
-await alt.events.subscribe('activeNoteChanged', note => {
+// IMPORTANT: hold on to the unsubscribe handles. Leaked subscriptions
+// stay alive for the lifetime of the plugin window. Call them in your
+// teardown path (e.g. `beforeunload`, your framework's unmount hook).
+const unsubActive = await alt.events.subscribe('activeNoteChanged', note => {
   currentNoteId = note?.id ?? null;
   if (currentNoteId !== null) void refresh(currentNoteId);
   else render(['(no active note)']);
 });
 
-await alt.events.subscribe('transcriptUpdated', ({ noteId }) => {
-  if (noteId === currentNoteId) void refresh(noteId);
-});
+const unsubTranscript = await alt.events.subscribe(
+  'transcriptUpdated',
+  ({ noteId }) => {
+    if (noteId === currentNoteId) void refresh(noteId);
+  },
+);
 
 const active = await alt.state.getActiveNoteSummary();
 if (active) {
   currentNoteId = active.id;
   await refresh(active.id);
 }
+
+// On teardown:
+window.addEventListener('beforeunload', () => {
+  void unsubActive();
+  void unsubTranscript();
+});
 ```
 
 ### 8.2 Quiz from a note (AI + storage)
@@ -800,7 +854,9 @@ export async function buildFlashcards(noteId: number) {
 ### 8.3 Transcribe an arbitrary audio file, then save as a new note
 
 ```ts
-// permissions: ['notes:write', 'transcription:run', 'notes:select']
+// permissions: ['notes:write', 'transcription:run']
+// Note: no `notes:select` needed — the host auto-focuses freshly created
+// notes in the main window as part of `notes.create`.
 import { alt } from 'alt-plugin-sdk';
 
 export async function importAudio(filePath: string, title: string) {
@@ -823,7 +879,6 @@ export async function importAudio(filePath: string, title: string) {
           title: 'Imported transcript',
           contentText: segments.join('\n'),
         });
-        await alt.notes.select({ noteId });
       },
       onError: err => console.error(err.code, err.message),
     },
@@ -834,7 +889,7 @@ export async function importAudio(filePath: string, title: string) {
 ### 8.4 Attach a PDF chosen via `<input type="file">`
 
 ```ts
-// permissions: ['files:write']
+// permissions: ['files:write', 'appState:read']
 import { alt } from 'alt-plugin-sdk';
 
 document.querySelector<HTMLInputElement>('#picker')!.addEventListener(
@@ -1002,7 +1057,7 @@ The npm package follows semver:
   also subscribe to. Polling `getStatus()` 10× a second is wasteful when
   `recordingStatusChanged` exists.
 - **Cap your storage.** `alt.storage` is plugin-scoped but lives in the
-  user's electron-store on disk. Anything over a few MB belongs in
+  user's SQLite database on disk. Anything over a few MB belongs in
   `alt.files.attach`.
 - **Plate JSON is not exposed.** Memo/summary content is round-tripped
   through Alt's internal Plate-rich-text codec; the SDK gives you the
