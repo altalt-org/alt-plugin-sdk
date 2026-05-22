@@ -326,6 +326,23 @@ const recent = await alt.notes.list({ limit: 20 });
 const filtered = await alt.notes.list({ folderId: 7, query: 'midterm', limit: 50 });
 const content = await alt.notes.getContent(recent[0].id);
 // { id, title, transcript, memo, summary }
+//
+// `transcript`, `memo`, `summary` are all PLAIN STRINGS, already converted
+// from the host's internal storage format for easy LLM consumption:
+//
+//   transcript: LLM-formatted plaintext, one line per entry. Examples:
+//                 [0:00] Hello everyone, welcome to today's meeting.
+//                 [0:06 | Speaker 1] I have the numbers ready.
+//                 [1:23:45 | SPEAKER_0] And in chapter four...
+//               (`[m:ss]` or `[h:mm:ss]` for >= 1h. Speaker is appended after
+//               ` | ` when present. This is NOT structured JSON — if you need
+//               raw timing/speaker data, use getComponent on the transcript
+//               component instead, see below.)
+//
+//   memo:      Markdown, already converted from Alt's internal Plate-JSON
+//              rich-text format. Pass back to setMemo as-is.
+//
+//   summary:   Markdown, same treatment as memo.
 
 // Write
 const created = await alt.notes.create({
@@ -348,12 +365,61 @@ await alt.notes.appendTranscriptLine({
 // Focus a note in Alt's main window (requires notes:select)
 await alt.notes.select({ noteId });
 
-// Components — fine-grained content blocks attached to a note
+// Components — fine-grained content blocks attached to a note.
+// `getComponent().contentText` is the RAW value as stored by the host — it
+// is NOT pre-converted like getContent() is. The exact shape depends on
+// componentType:
+//
+//   transcript      JSON-stringified `TranscriptEntry[]`. Parse with
+//                   JSON.parse to get structured speaker/timing data.
+//                   This is the right source for anything that needs to
+//                   line up with the recording — getContent().transcript
+//                   has already been collapsed to plaintext.
+//   memo, summary   Plate-JSON (Alt's internal rich-text format). Treat
+//                   as opaque — there are no SDK helpers to manipulate
+//                   Plate nodes. To read these as markdown, use
+//                   getContent() / getMemo() instead. To write, use
+//                   setMemo() / setSummary() with markdown.
+//   slide_summary,  Plain text/markdown — exactly what was last upserted
+//   meeting_notes   via upsertComponent({ contentText, ... }).
+//   slides,         File-backed components. `contentText` is `null`. Use
+//   recording       alt.files.read({ fileId }) for the bytes; the fileId
+//                   comes from alt.files.list({ noteId }).
+
 const components = await alt.notes.listComponents({ noteId });
+
 const memoComponent = await alt.notes.getComponent({
   componentId: components.find(c => c.componentType === 'memo')!.id,
 });
-// memoComponent.contentText holds the markdown.
+// memoComponent.contentText is Plate JSON; use alt.notes.getMemo() or
+// alt.notes.getContent() if you want markdown instead.
+
+// Structured transcript (speaker + ms timing) — see recipe in §8 below.
+// The raw transcript contentText is JSON-stringified entries with this
+// internal shape (NOT the SDK's `PluginTranscriptionSegment`, which uses
+// `startMs`/`endMs` — the stored shape uses `start`/`end`):
+interface RawTranscriptSegment {
+  start: number;          // ms from recording start
+  end: number;            // ms from recording start
+  text: string;
+  speaker?: string;       // e.g. 'SPEAKER_0', 'Speaker 1'
+  translatedText?: string;
+}
+interface RawTranscriptEntry {
+  relativeStart?: number; // ms from recording start (entry-level)
+  speaker?: string;
+  segments?: RawTranscriptSegment[];
+  originalText?: string;
+  translatedText?: string;
+  createdAt: number;      // unix ms when the entry was first appended
+}
+
+const transcriptComp = components.find(c => c.componentType === 'transcript');
+if (transcriptComp) {
+  const raw = await alt.notes.getComponent({ componentId: transcriptComp.id });
+  const entries: RawTranscriptEntry[] = JSON.parse(raw.contentText ?? '[]');
+  // entries[i].relativeStart, entries[i].speaker, entries[i].segments[j].text
+}
 
 // Singleton component types (memo / summary / transcript) auto-upsert —
 // calling upsertComponent for type=memo on a note that already has a memo
@@ -790,6 +856,76 @@ document.querySelector<HTMLInputElement>('#picker')!.addEventListener(
 );
 ```
 
+### 8.5 Structured transcript with speaker + ms timing
+
+`alt.notes.getContent(noteId).transcript` returns LLM-formatted plaintext
+(`[0:06 | Speaker 1] ...`). That's the wrong source when you need to line
+up text with the recording, or render a speaker-labeled UI similar to
+Alt's own transcript view. For that, go through the raw transcript
+component:
+
+```ts
+// permissions: ['notes:read']
+import { alt } from 'alt-plugin-sdk';
+
+interface RawTranscriptSegment {
+  start: number;            // ms from recording start
+  end: number;              // ms from recording start
+  text: string;
+  speaker?: string;         // 'SPEAKER_0', 'Speaker 1', etc.
+  translatedText?: string;
+}
+interface RawTranscriptEntry {
+  relativeStart?: number;   // ms; entry-level start
+  speaker?: string;
+  segments?: RawTranscriptSegment[];
+  originalText?: string;
+  translatedText?: string;
+  createdAt: number;        // unix ms
+}
+
+async function getStructuredTranscript(
+  noteId: number,
+): Promise<RawTranscriptEntry[]> {
+  const components = await alt.notes.listComponents({ noteId });
+  const transcript = components.find(c => c.componentType === 'transcript');
+  if (!transcript) return [];
+
+  const raw = await alt.notes.getComponent({ componentId: transcript.id });
+  if (!raw.contentText) return [];
+
+  try {
+    const parsed = JSON.parse(raw.contentText);
+    return Array.isArray(parsed) ? (parsed as RawTranscriptEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Use it:
+const entries = await getStructuredTranscript(noteId);
+for (const entry of entries) {
+  for (const seg of entry.segments ?? []) {
+    console.log(
+      `${seg.start}ms - ${seg.end}ms [${seg.speaker ?? '?'}]:`,
+      seg.text,
+    );
+  }
+}
+```
+
+Two important caveats:
+
+- Diarization is opt-in. If the user recorded without diarization
+  enabled, `speaker` will be absent on most entries — fall back to a
+  single-speaker render.
+- The internal segment shape is `{ start, end }` (milliseconds), NOT the
+  SDK's `PluginTranscriptionSegment` (which uses `startMs` / `endMs`).
+  The plugin SDK type is for the streaming transcription API; the stored
+  format is older and predates that naming choice. Use the inline
+  `RawTranscriptSegment` type above (or copy it into your code) rather
+  than reusing the SDK type — the field names don't match.
+
 ---
 
 ## 9. Errors
@@ -872,7 +1008,25 @@ The npm package follows semver:
   through Alt's internal Plate-rich-text codec; the SDK gives you the
   markdown view via `getContent` / `getMemo` and accepts markdown back via
   `setMemo` / `setSummary`. There is no API to manipulate Plate nodes
-  directly.
+  directly. If you call `getComponent` on a memo or summary you get the
+  raw Plate JSON in `contentText` — don't try to parse it, use the
+  markdown surfaces instead.
+- **`getContent().transcript` is plaintext, not JSON.** It's the same
+  LLM-friendly format Alt uses internally to feed transcripts to LLMs
+  (lines like `[0:06 | Speaker 1] text`). If you need structured
+  speaker/timing data (to render a transcript UI, jump to a timestamp,
+  group by speaker, etc.), don't try to parse `getContent().transcript`
+  — go through `listComponents` → find the `transcript` component →
+  `getComponent` → `JSON.parse(contentText)`. See §8.5 for a worked
+  example. The inline JSON shape is internal and differs from
+  `PluginTranscriptionSegment` (it uses `start`/`end` ms, not `startMs`/
+  `endMs`).
+- **Components have different `contentText` shapes per type.** The same
+  `getComponent` API gives you Plate JSON for `memo`/`summary`,
+  JSON-stringified entries for `transcript`, plain text for
+  `slide_summary`/`meeting_notes`, and `null` for file-backed types
+  (`slides`/`recording`). Always branch on `componentType` before
+  touching `contentText`.
 
 ---
 
