@@ -90,7 +90,7 @@ This means:
 Every privileged call is checked twice: Zod schema validation at the preload
 boundary, and a permission check at the main-process service. A missing
 permission throws — your `await alt.notes.create(...)` rejects with
-`Plugin {id} lacks permission "notes:write"` and the call never reaches the
+`Plugin permission required: notes:write` and the call never reaches the
 database.
 
 ---
@@ -170,15 +170,15 @@ at design time so typos become TypeScript errors.
 
 | Field         | Type       | Required | Notes                                                                                |
 | ------------- | ---------- | -------- | ------------------------------------------------------------------------------------ |
-| `id`          | `string`   | yes      | Lowercase. Letters, digits, dots, dashes, underscores. Reverse-DNS style recommended. |
-| `name`        | `string`   | yes      | Display name. 1–80 chars.                                                            |
-| `version`     | `string`   | yes      | Semver. `0.1.0`, `1.2.3-beta.4`, etc.                                                |
-| `entry`       | `string`   | yes      | HTML path inside the bundle. Typically `index.html`.                                 |
+| `id`          | `string`   | yes      | 1–80 chars. Lowercase. Letters, digits, dots, dashes, underscores (`^[a-z0-9][a-z0-9._-]*$`). Reverse-DNS style recommended. |
+| `name`        | `string`   | yes      | Display name. 1–120 chars.                                                           |
+| `version`     | `string`   | yes      | 1–80 chars. Semver recommended (`0.1.0`, `1.2.3-beta.4`, etc.); not regex-enforced.   |
+| `entry`       | `string`   | yes      | HTML path inside the bundle, 1–260 chars. Typically `index.html`.                    |
 | `permissions` | `string[]` | no       | Granted as declared. See §5. Defaults to `[]`.                                       |
-| `sdkVersion`  | `string`   | no       | Major version this plugin was built against. Defaults to `"1"`. Host refuses higher. |
+| `sdkVersion`  | `string`   | no       | Major (or `M.m[.p]`) this plugin was built against. Defaults to `"1"`. Host refuses higher. |
 | `description` | `string`   | no       | ≤ 500 chars.                                                                         |
-| `author`      | `string`   | no       | ≤ 200 chars.                                                                        |
-| `icon`        | `string`   | no       | `data:` URI or bundle-relative path.                                                 |
+| `author`      | `string`   | no       | ≤ 120 chars.                                                                         |
+| `icon`        | `string`   | no       | ≤ 260 chars. `data:` URI or bundle-relative path.                                    |
 
 ### `sdkVersion` and host compatibility
 
@@ -250,8 +250,10 @@ const all = await alt.storage.list();
 await alt.storage.delete('counter');
 ```
 
-Keys: ≤ 200 chars. Values: must be `PluginStorageValue` (`string | number |
-boolean | null | array | record`).
+Keys: 1–160 chars matching `^[a-zA-Z0-9._:-]+$` (letters, digits, dot,
+underscore, colon, hyphen — no spaces, slashes, or other punctuation). Values:
+must be `PluginStorageValue` (`string | number | boolean | null | array |
+record`).
 
 ### 6.2 `alt.state` — read app state
 
@@ -799,20 +801,22 @@ no `{ ok: false }` envelopes. Catch them:
 try {
   await alt.notes.create({ title: '' /* bad: empty */ });
 } catch (err) {
-  // err.message: 'Plugin io.example.hello: notes.create — title: …'
+  // err.message: Zod validation failure on `title`
   console.error(err);
 }
 ```
 
 Common categories:
 
-- **Permission**: `Plugin {id} lacks permission "{perm}"`. Add the
-  permission to your manifest and have the user re-enable the plugin.
-- **Schema**: Zod validation message, e.g. `title: String must contain at
-  least 1 character(s)`. Fix the call site.
-- **Domain**: e.g. `Plugin files: note 999 not found`, `Plugin notes:
-  component 12 is not text-based`. These are runtime invariants from the
-  host service.
+- **Permission**: `Plugin permission required: {permission}` (e.g.
+  `Plugin permission required: notes:write`). Add the permission to your
+  manifest and reinstall/re-enable the plugin.
+- **Schema**: Zod validation message thrown straight from the host service,
+  e.g. `title: Too small: expected string to have >=1 characters`. Fix the
+  call site.
+- **Domain**: e.g. `Plugin files: note 999 not found`, `Plugin notes: component
+  12 not found`, `Plugin notes: component 12 does not belong to note 7`.
+  These are runtime invariants from the host service.
 - **Streaming**: AI and transcription streams surface errors through
   `onError({ code, message })` instead of throwing — the outer Promise
   resolves to a handle and the stream fails asynchronously. Handle both.
