@@ -1,5 +1,7 @@
 # `alt-plugin-sdk`
 
+[![npm](https://img.shields.io/npm/v/alt-plugin-sdk.svg)](https://www.npmjs.com/package/alt-plugin-sdk)
+
 Type-safe browser SDK and runtime contracts for Alt plugins.
 
 Plugins run inside an isolated `WebContentsView` and talk to the host through a single `window.alt` object exposed by Alt's preload bridge. This package ships:
@@ -8,6 +10,18 @@ Plugins run inside an isolated `WebContentsView` and talk to the host through a 
 - the Zod schemas + TypeScript types every Alt plugin call uses
 - `defineManifest(...)` for authoring `manifest.json` in TypeScript
 - `createAltFetch()` / `createAltProvider()` AI helpers for AI-SDK consumers
+
+## Install
+
+Published on npm: <https://www.npmjs.com/package/alt-plugin-sdk>
+
+```bash
+pnpm add alt-plugin-sdk
+# or
+npm install alt-plugin-sdk
+# or
+yarn add alt-plugin-sdk
+```
 
 ```ts
 import { alt, defineManifest } from 'alt-plugin-sdk';
