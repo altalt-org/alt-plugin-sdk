@@ -61,6 +61,49 @@ export const pluginManifestLocaleSchema = z.object({
 });
 export type PluginManifestLocale = z.infer<typeof pluginManifestLocaleSchema>;
 
+/**
+ * Stable marketplace category keys. The label shown to users is localized by
+ * the consumer (landing site / in-app marketplace), NOT stored per-plugin — keep
+ * this list in sync with the marketplace's category-label dictionaries.
+ */
+export const pluginCategorySchema = z.enum([
+  'productivity',
+  'education',
+  'writing',
+  'research',
+  'developer',
+  'ai',
+  'media',
+  'utilities',
+]);
+export type PluginCategory = z.infer<typeof pluginCategorySchema>;
+
+/** Per-locale overrides for the marketplace listing copy. */
+export const pluginMarketplaceLocaleSchema = z.object({
+  longDescription: z.string().max(4000).optional(),
+});
+export type PluginMarketplaceLocale = z.infer<
+  typeof pluginMarketplaceLocaleSchema
+>;
+
+/**
+ * Optional store-listing metadata. The Alt host ignores this block at load time
+ * (it only needs the run-time fields); the marketplace reads it to populate the
+ * plugin's detail page. `screenshots` are bundle-relative paths resolved against
+ * the same root as `entry`/`icon`. `name`/`description` localization stays in
+ * the top-level {@link pluginManifestSchema.locales}; only `longDescription`
+ * is localized here.
+ */
+export const pluginMarketplaceSchema = z.object({
+  category: pluginCategorySchema.optional(),
+  longDescription: z.string().max(4000).optional(),
+  screenshots: z.array(z.string().min(1).max(260)).max(8).optional(),
+  locales: z
+    .record(z.string().min(2).max(35), pluginMarketplaceLocaleSchema)
+    .optional(),
+});
+export type PluginMarketplace = z.infer<typeof pluginMarketplaceSchema>;
+
 export const pluginManifestSchema = z.object({
   id: z
     .string()
@@ -82,6 +125,12 @@ export const pluginManifestSchema = z.object({
   locales: z
     .record(z.string().min(2).max(35), pluginManifestLocaleSchema)
     .optional(),
+  /**
+   * Optional marketplace listing metadata (category, long description,
+   * screenshots, localized copy). Ignored by the host at load time; consumed by
+   * the plugin marketplace. See {@link pluginMarketplaceSchema}.
+   */
+  marketplace: pluginMarketplaceSchema.optional(),
   /**
    * SDK major (or major.minor[.patch]) this plugin was built against.
    * The host refuses to load a plugin whose major exceeds {@link PLUGIN_HOST_SDK_MAJOR}.

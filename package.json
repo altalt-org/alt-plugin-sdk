@@ -1,6 +1,6 @@
 {
   "name": "alt-plugin-sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Type-safe browser SDK and runtime contracts for Alt plugins.",
   "license": "MIT",
   "author": "Alt (https://altalt.io)",

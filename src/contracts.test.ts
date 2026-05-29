@@ -6,10 +6,12 @@ import {
   pluginAiModelIdSchema,
   pluginAiModelInfoSchema,
   pluginAiStreamRequestSchema,
+  pluginCategorySchema,
   pluginEventSchema,
   pluginFolderNodeSchema,
   pluginGetNoteContentParamsSchema,
   pluginManifestSchema,
+  pluginMarketplaceSchema,
   pluginNoteComponentSummarySchema,
   pluginNoteContentSchema,
   pluginNoteSummarySchema,
@@ -362,5 +364,47 @@ describe('alt-plugin-sdk contracts', () => {
       name: 'Quiz Generator',
       description: 'Generate quizzes from your notes.',
     });
+  });
+
+  it('accepts an optional marketplace block with localized long descriptions', () => {
+    const manifest = defineManifest({
+      id: 'quiz.generator',
+      name: 'Quiz Generator',
+      version: '1.0.0',
+      entry: 'index.html',
+      marketplace: {
+        category: 'education',
+        longDescription: 'Generate quizzes from your notes.',
+        screenshots: ['screenshots/quiz.png'],
+        locales: {
+          ko: { longDescription: '노트로 퀴즈를 만드세요.' },
+        },
+      },
+    });
+
+    expect(manifest.marketplace).toEqual({
+      category: 'education',
+      longDescription: 'Generate quizzes from your notes.',
+      screenshots: ['screenshots/quiz.png'],
+      locales: { ko: { longDescription: '노트로 퀴즈를 만드세요.' } },
+    });
+  });
+
+  it('rejects an unknown marketplace category', () => {
+    expect(() =>
+      pluginMarketplaceSchema.parse({ category: 'not-a-category' }),
+    ).toThrow();
+    expect(pluginCategorySchema.options).toContain('education');
+  });
+
+  it('strips unknown manifest keys so the host stays forward-compatible', () => {
+    const parsed = pluginManifestSchema.parse({
+      id: 'notes.timeline',
+      name: 'Notes Timeline',
+      version: '1.0.0',
+      entry: 'index.html',
+      somethingTheHostDoesNotKnow: true,
+    });
+    expect(parsed).not.toHaveProperty('somethingTheHostDoesNotKnow');
   });
 });
