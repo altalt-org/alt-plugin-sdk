@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AltPluginApi } from './client';
 import { alt, getAlt } from './client';
+import type { PluginEventData } from './contracts';
 
 const globalWithWindow = globalThis as unknown as {
   window?: Window &
@@ -375,5 +376,42 @@ describe('alt-plugin-sdk client', () => {
       handlers,
     );
     expect(handlers.onChunk).toHaveBeenCalled();
+  });
+
+  it('alt.locale.get reads the language setting and defaults to en', async () => {
+    const { api } = installMockAlt();
+    vi.mocked(api.settings.get).mockImplementation(async key =>
+      key === 'language' ? 'ko' : null,
+    );
+
+    await expect(alt.locale.get()).resolves.toBe('ko');
+    expect(api.settings.get).toHaveBeenCalledWith('language');
+
+    vi.mocked(api.settings.get).mockResolvedValueOnce(null);
+    await expect(alt.locale.get()).resolves.toBe('en');
+  });
+
+  it('alt.locale.onChange fires only for language changes', async () => {
+    const { api } = installMockAlt();
+    let emit:
+      | ((payload: PluginEventData<'settingChanged'>) => void)
+      | undefined;
+    vi.mocked(api.events.subscribe).mockImplementation(async (_event, cb) => {
+      emit = cb as (payload: PluginEventData<'settingChanged'>) => void;
+      return async () => undefined;
+    });
+    const onLocale = vi.fn();
+
+    await alt.locale.onChange(onLocale);
+    expect(api.events.subscribe).toHaveBeenCalledWith(
+      'settingChanged',
+      expect.any(Function),
+    );
+
+    emit?.({ key: 'theme', value: 'dark' });
+    expect(onLocale).not.toHaveBeenCalled();
+
+    emit?.({ key: 'language', value: 'de' });
+    expect(onLocale).toHaveBeenCalledWith('de');
   });
 });

@@ -176,6 +176,31 @@ export interface AltPluginApi {
   };
 }
 
+/** Host UI language code, e.g. `'en'`, `'ko'`, `'de'`. */
+export type PluginLocale = string;
+
+/**
+ * Read and observe the host's current UI language. A convenience layer over the
+ * `language` app setting and the `settingChanged` event — a plugin using it
+ * needs the `settings:read` and `events:subscribe` permissions.
+ */
+export interface AltLocaleApi {
+  /** The host's current UI language. Defaults to `'en'` when unset. */
+  get(): Promise<PluginLocale>;
+  /**
+   * Subscribe to host language changes. The callback fires with the new locale
+   * each time the user switches the app language. Returns an async unsubscribe.
+   */
+  onChange(
+    callback: (locale: PluginLocale) => void,
+  ): Promise<() => Promise<void>>;
+}
+
+/** The SDK surface plugins import as `alt` — the host bridge plus SDK helpers. */
+export interface AltPluginSdk extends AltPluginApi {
+  locale: AltLocaleApi;
+}
+
 export interface AltPluginInvokeBridge {
   invoke(method: PluginSdkMethod, params?: unknown): Promise<unknown>;
 }
@@ -195,7 +220,7 @@ export function getAlt(): AltPluginApi {
   return requireWindowAlt();
 }
 
-export const alt: AltPluginApi = {
+export const alt: AltPluginSdk = {
   storage: {
     get: key => getAlt().storage.get(key),
     set: (key, value) => getAlt().storage.set(key, value),
@@ -265,6 +290,18 @@ export const alt: AltPluginApi = {
   settings: {
     get: key => getAlt().settings.get(key),
     list: () => getAlt().settings.list(),
+  },
+  locale: {
+    get: async () => {
+      const value = await getAlt().settings.get('language');
+      return typeof value === 'string' ? value : 'en';
+    },
+    onChange: callback =>
+      getAlt().events.subscribe('settingChanged', ({ key, value }) => {
+        if (key === 'language' && typeof value === 'string') {
+          callback(value);
+        }
+      }),
   },
 };
 

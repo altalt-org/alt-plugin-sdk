@@ -19,6 +19,7 @@ import {
   pluginSdkInvokeRequestSchema,
   pluginSdkMethodSchema,
   pluginStorageValueSchema,
+  resolveLocalizedManifest,
   PLUGIN_HOST_SDK_MAJOR,
   PLUGIN_NOTES_LIST_MAX_LIMIT,
 } from './contracts';
@@ -331,5 +332,35 @@ describe('alt-plugin-sdk contracts', () => {
     expect(() =>
       pluginGetNoteContentParamsSchema.parse({ noteId: -1 }),
     ).toThrow();
+  });
+
+  it('accepts localized manifest fields and resolves them per locale', () => {
+    const manifest = defineManifest({
+      id: 'quiz.generator',
+      name: 'Quiz Generator',
+      version: '1.0.0',
+      entry: 'index.html',
+      description: 'Generate quizzes from your notes.',
+      locales: {
+        ko: { name: '퀴즈 생성기', description: '노트로 퀴즈를 만드세요.' },
+        de: { name: 'Quiz-Generator' },
+      },
+    });
+
+    // Exact-locale override applies to both fields.
+    expect(resolveLocalizedManifest(manifest, 'ko')).toEqual({
+      name: '퀴즈 생성기',
+      description: '노트로 퀴즈를 만드세요.',
+    });
+    // Language-only override + per-field fallback to the default description.
+    expect(resolveLocalizedManifest(manifest, 'de-DE')).toEqual({
+      name: 'Quiz-Generator',
+      description: 'Generate quizzes from your notes.',
+    });
+    // Unknown locale falls back entirely to the top-level defaults.
+    expect(resolveLocalizedManifest(manifest, 'fr')).toEqual({
+      name: 'Quiz Generator',
+      description: 'Generate quizzes from your notes.',
+    });
   });
 });

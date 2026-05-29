@@ -50,6 +50,17 @@ export const pluginActionSchema = z.enum(['notes.select', 'notes.create']);
 
 const sdkVersionRegex = /^\d+(?:\.\d+){0,2}$/;
 
+/**
+ * Per-locale overrides for the user-facing manifest fields. The top-level
+ * `name`/`description` remain the default (fallback) values; an entry here
+ * overrides them for a specific locale.
+ */
+export const pluginManifestLocaleSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  description: z.string().max(500).optional(),
+});
+export type PluginManifestLocale = z.infer<typeof pluginManifestLocaleSchema>;
+
 export const pluginManifestSchema = z.object({
   id: z
     .string()
@@ -63,6 +74,14 @@ export const pluginManifestSchema = z.object({
   description: z.string().max(500).optional(),
   author: z.string().max(120).optional(),
   icon: z.string().max(260).optional(),
+  /**
+   * Optional localized overrides for `name`/`description`, keyed by locale code
+   * (e.g. `'ko'`, `'de'`). Any locale may be supplied — the host resolves the
+   * ones it understands and falls back to the top-level fields otherwise.
+   */
+  locales: z
+    .record(z.string().min(2).max(35), pluginManifestLocaleSchema)
+    .optional(),
   /**
    * SDK major (or major.minor[.patch]) this plugin was built against.
    * The host refuses to load a plugin whose major exceeds {@link PLUGIN_HOST_SDK_MAJOR}.
@@ -105,6 +124,24 @@ export type PluginEvent = z.infer<typeof pluginEventSchema>;
 export type PluginAction = z.infer<typeof pluginActionSchema>;
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;
 export type PluginManifestInput = z.input<typeof pluginManifestSchema>;
+
+/**
+ * Resolve a manifest's user-facing `name`/`description` for a target locale.
+ * Tries the exact locale, then its language part (`ko-KR` → `ko`), then falls
+ * back to the top-level default fields. Each field falls back independently, so
+ * a locale that overrides only `name` still inherits the default description.
+ */
+export function resolveLocalizedManifest(
+  manifest: Pick<PluginManifest, 'name' | 'description' | 'locales'>,
+  locale: string,
+): { name: string; description: string | undefined } {
+  const language = locale.split('-')[0] ?? locale;
+  const override = manifest.locales?.[locale] ?? manifest.locales?.[language];
+  return {
+    name: override?.name ?? manifest.name,
+    description: override?.description ?? manifest.description,
+  };
+}
 
 export type PluginStorageValue =
   | string

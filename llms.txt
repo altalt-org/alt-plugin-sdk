@@ -179,6 +179,28 @@ at design time so typos become TypeScript errors.
 | `description` | `string`   | no       | ≤ 500 chars.                                                                         |
 | `author`      | `string`   | no       | ≤ 120 chars.                                                                         |
 | `icon`        | `string`   | no       | ≤ 260 chars. `data:` URI or bundle-relative path.                                    |
+| `locales`     | `object`   | no       | Per-locale overrides for `name`/`description`, keyed by locale code. See below.      |
+
+### Localized `name` / `description`
+
+Top-level `name`/`description` are the defaults. `locales` overrides them per
+host UI language; each field falls back independently to the default.
+
+```jsonc
+{
+  "name": "Quiz Generator",
+  "description": "Generate quizzes from your notes.",
+  "locales": {
+    "ko": { "name": "퀴즈 생성기", "description": "노트로 퀴즈를 만드세요." },
+    "de": { "name": "Quiz-Generator" }
+  }
+}
+```
+
+The host applies this to the marketplace and installed-plugins list.
+`resolveLocalizedManifest(manifest, locale)` (exported from
+`alt-plugin-sdk/contracts`) does the same resolution at runtime: it tries the
+exact locale, then the language part (`ko-KR` → `ko`), then the default.
 
 ### `sdkVersion` and host compatibility
 
@@ -210,7 +232,7 @@ the IPC boundary and never touches the database, file system, or models.
 | `transcription:run` | `alt.transcription.transcribeFile / transcribeNote`                                                                      |
 | `files:read`        | `alt.files.list / read`                                                                                                  |
 | `files:write`       | `alt.files.attach / delete`                                                                                              |
-| `settings:read`     | `alt.settings.get / list`                                                                                                |
+| `settings:read`     | `alt.settings.get / list`; `alt.locale.get` (pair with `events:subscribe` for `alt.locale.onChange`)                     |
 | `actions:notes`     | **Legacy.** Old plugins that declare this auto-get `notes:write` + `notes:select`. New plugins should declare the modern names. |
 | `settings:write`    | **Reserved.** Accepted by the manifest schema for forward compatibility, but no method currently requires it. Don't declare it. |
 
@@ -697,6 +719,27 @@ const all = await alt.settings.list();
 ```
 
 Watch for updates via `events.subscribe('settingChanged', …)`.
+
+### 6.11 `alt.locale` — read & observe the host UI language
+
+Permissions: `settings:read` (for `get`) and `events:subscribe` (for
+`onChange`). A thin convenience layer over the `language` setting and the
+`settingChanged` event, for localizing your plugin's own UI.
+
+```ts
+const locale = await alt.locale.get();
+// e.g. 'en' | 'ko' | 'de'. Defaults to 'en' when unset.
+
+const stop = await alt.locale.onChange((next) => {
+  // Fires whenever the user switches the app language.
+  rerenderWith(next);
+});
+// later: await stop();
+```
+
+This is sugar — `get()` is `settings.get('language')` and `onChange()` is a
+`settingChanged` subscription filtered to `key === 'language'`. Use it so your
+UI tracks the same language as the host (and the localized manifest fields).
 
 ---
 

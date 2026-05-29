@@ -52,6 +52,28 @@ const folders = await alt.notes.listFolders();
 | `description` | `string`   | Optional, ≤ 500 chars                                                              |
 | `author`      | `string`   | Optional                                                                           |
 | `icon`        | `string`   | Optional, data URI or relative path                                                |
+| `locales`     | `object`   | Optional. Per-locale overrides for `name`/`description` — see below.               |
+
+### Localized name & description
+
+`name` and `description` are the default (fallback) values. To show a localized
+name/description in the marketplace and the installed-plugins list, add a
+`locales` map keyed by locale code. Alt resolves the host's UI language (`en`,
+`ko`, `de`), falling back per field to the top-level value:
+
+```jsonc
+{
+  "name": "Quiz Generator",
+  "description": "Generate quizzes from your notes.",
+  "locales": {
+    "ko": { "name": "퀴즈 생성기", "description": "노트로 퀴즈를 만드세요." },
+    "de": { "name": "Quiz-Generator" }, // description falls back to the default
+  },
+}
+```
+
+`resolveLocalizedManifest(manifest, locale)` (exported from the SDK) performs
+this resolution if you need it at runtime.
 
 ## Permissions
 
@@ -71,7 +93,7 @@ A plugin is granted exactly what its manifest declares. Methods that need a perm
 | `transcription:run` | `alt.transcription.transcribeFile / transcribeNote`                                                                      |
 | `files:read`        | `alt.files.list / read`                                                                                                  |
 | `files:write`       | `alt.files.attach / delete`                                                                                              |
-| `settings:read`     | `alt.settings.get / list`                                                                                                |
+| `settings:read`     | `alt.settings.get / list`; `alt.locale.get` (with `events:subscribe` for `alt.locale.onChange`)                          |
 | `actions:notes`     | **Legacy.** Old plugins that declare this get `notes:write` + `notes:select` automatically — no manifest changes needed. |
 
 ## API surface
@@ -166,6 +188,19 @@ Read-only, curated allowlist. Plugins that need their own settings should use `a
 
 - `get(key)` — one of `theme`, `language`, `transcription.lectureLanguage`, `transcription.diarizationEnabled`, `transcription.includeSystemAudio`
 - `list()` → snapshot of every key above
+
+### `alt.locale`
+
+Convenience wrapper over the `language` setting + the `settingChanged` event, for localizing your plugin's own UI. Needs `settings:read` and `events:subscribe`.
+
+- `get()` → the host's current UI language (e.g. `'en'`, `'ko'`, `'de'`); defaults to `'en'` when unset
+- `onChange(callback)` → fires with the new locale whenever the user switches the app language; returns an async unsubscribe
+
+```ts
+const locale = await alt.locale.get();
+const stop = await alt.locale.onChange(next => render(next));
+// later: await stop();
+```
 
 ## AI helpers
 
