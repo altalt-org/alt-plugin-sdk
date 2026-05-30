@@ -180,6 +180,7 @@ at design time so typos become TypeScript errors.
 | `author`      | `string`   | no       | ≤ 120 chars.                                                                         |
 | `icon`        | `string`   | no       | ≤ 260 chars. `data:` URI or bundle-relative path.                                    |
 | `locales`     | `object`   | no       | Per-locale overrides for `name`/`description`, keyed by locale code. See below.      |
+| `marketplace` | `object`   | no       | Store-listing metadata (category, long description, screenshots, localized copy). Ignored by the host at load; consumed by the marketplace. See below. |
 
 ### Localized `name` / `description`
 
@@ -201,6 +202,36 @@ The host applies this to the marketplace and installed-plugins list.
 `resolveLocalizedManifest(manifest, locale)` (exported from
 `alt-plugin-sdk/contracts`) does the same resolution at runtime: it tries the
 exact locale, then the language part (`ko-KR` → `ko`), then the default.
+
+### Marketplace listing
+
+`marketplace` carries the plugin's store-listing metadata. The Alt host ignores
+it at load time (it only needs the run-time fields); the plugin marketplace
+reads it to build the detail page. Everything below is optional.
+
+| Field             | Type       | Notes                                                                                          |
+| ----------------- | ---------- | ---------------------------------------------------------------------------------------------- |
+| `category`        | `string`   | One of a fixed taxonomy: `productivity`, `education`, `writing`, `research`, `developer`, `ai`, `media`, `utilities`. The display label is localized by the marketplace, not the plugin. |
+| `longDescription` | `string`   | ≤ 4000 chars. Detail-page body copy.                                                           |
+| `screenshots`     | `string[]` | Up to 8 bundle-relative image paths (png/jpg/webp/gif), resolved against the same root as `entry`/`icon`. |
+| `locales`         | `object`   | Per-locale overrides for `longDescription`, keyed by locale code.                              |
+
+```jsonc
+{
+  "marketplace": {
+    "category": "education",
+    "longDescription": "Turn any note into a study session…",
+    "screenshots": ["screenshots/quiz.png"],
+    "locales": {
+      "ko": { "longDescription": "노트를 학습 세션으로 바꿔보세요…" }
+    }
+  }
+}
+```
+
+Validated by `pluginMarketplaceSchema` (exported from `alt-plugin-sdk/contracts`).
+`name`/`description` localization stays in the top-level `locales`; only
+`longDescription` is localized here.
 
 ### `sdkVersion` and host compatibility
 
