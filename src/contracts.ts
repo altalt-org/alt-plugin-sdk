@@ -564,6 +564,7 @@ export const pluginNoteComponentTypeSchema = z.enum([
   'slide_summary',
   'meeting_notes',
   'slide_memo',
+  'slide_comment',
 ]);
 
 export type PluginNoteComponentType = z.infer<
